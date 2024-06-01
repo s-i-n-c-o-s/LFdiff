@@ -1,3 +1,4 @@
+from typing import List
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -388,15 +389,27 @@ class PriorIntegrationModule(nn.Module):
 
 # DHRNet
 class DHRNet(nn.Module):
-    def __init__(self, in_channels, prior_channels, num_frm=3) -> None:
+    def __init__(self, in_channels, prior_channels, num_layers: List[int]) -> None:
         super(DHRNet, self).__init__()
-        self.pim = PriorIntegrationModule(in_channels, prior_channels)
-        self.frms = nn.Sequential(
-            *[FeatureRefinementModule(in_channels) for _ in range(num_frm)]
-        )
+
+        self.num_layers = num_layers
+
+        for i in num_layers:
+            self.add_module(
+                f"pim_{i}",
+                PriorIntegrationModule(
+                    in_channels=in_channels, prior_channels=prior_channels, k=4
+                ),
+            )
+            for j in range(i):
+                self.add_module(
+                    f"frm_{i}_{j}",
+                    FeatureRefinementModule(in_channels=in_channels, k=2),
+                )
 
     def forward(self, x, z):
-        x = self.pim(x, z)
-        for frm in self.frms:
-            x = frm(x)
+        for i in self.num_layers:
+            x = getattr(self, f"pim_{i}")(x, z)
+            for j in range(i):
+                x = getattr(self, f"frm_{i}_{j}")(x)
         return x
