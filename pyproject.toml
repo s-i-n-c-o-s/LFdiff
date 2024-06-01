@@ -1,0 +1,6 @@
+[project]
+name = "lfdiff"
+version = "0.0.1"
+
+[tool.setuptools]
+packages = ["lfdiff"]
