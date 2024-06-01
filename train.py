@@ -5,7 +5,8 @@ import torch.optim as optim
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 import multiprocessing
-from models import LPENet, DHRNet
+from lfdiff.models import LPENet, DHRNet
+from DM.models import SimpleModel, DiffusionProcess, ReconstructionLoss
 from utils import HDRDataset, tonemap
 
 
@@ -78,4 +79,46 @@ if __name__ == '__main__':
     torch.save(lpe_net.state_dict(), f'model_lpe_epoch_{epoch+1}.pth')
     torch.save(dhr_net.state_dict(), f'model_dhr_epoch_{epoch+1}.pth')
     print(f'Saved model weights for epoch {epoch+1}')
+
+
+    # Stage 2:
+    model = SimpleModel().to('cuda')
+    dhrnet = DHRNet().to('cuda')  # Define your DHRNet model
+    diffusion = DiffusionProcess(num_steps=1000, beta_start=0.0001, beta_end=0.02, device='cuda')
+    optimizer = optim.Adam(list(model.parameters()) + list(dhrnet.parameters()), lr=1e-4)
+
+    num_epochs=10
+    S=50
+
+    model.train()
+    dhrnet.train()
+    
+    for epoch in range(num_epochs):
+        for x_0 in data_loader:
+            x_0 = x_0.to(diffusion.device)
+            t = torch.randint(0, diffusion.num_steps, (x_0.size(0),)).to(diffusion.device)
+            
+            # Diffusion Process
+            z_t = diffusion.sample_noise(x_0, t)
+            z_hat = diffusion.ddim_reverse_process(z_t, S, model)
+            
+            # DHRNet guidance via PIM
+            dhr_output = dhrnet(z_hat)
+            
+            # Loss calculation
+            epsilon = torch.randn_like(z_t).to(diffusion.device)
+            pred_epsilon = model(z_t, t)
+            
+            L_diff = F.mse_loss(pred_epsilon, epsilon) + F.l1_loss(z_hat, x_0)
+            
+            
+            reconstruction_loss_fn = ReconstructionLoss().to('cuda')
+            
+            L_r = reconstruction_loss_fn(dhr_output, x_0)
+            
+            total_loss = L_diff + L_r
+            
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
 
