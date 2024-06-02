@@ -51,7 +51,7 @@ class SimpleModel(nn.Module):
 
 # Reconstruction Loss
 class ReconstructionLoss(nn.Module):
-    def __init__(self, perceptual_weight ：float = 1e-2):
+    def __init__(self, perceptual_weight : float = 1e-2):
         super(ReconstructionLoss, self).__init__()
         self.perceptual_weight = perceptual_weight
         self.l1_loss = nn.L1Loss()
