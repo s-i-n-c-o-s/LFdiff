@@ -54,7 +54,7 @@ class ReconstructionLoss(nn.Module):
     def __init__(self):
         super(ReconstructionLoss, self).__init__()
         self.l1_loss = nn.L1Loss()
-        self.vgg = models.vgg16(pretrained=True).features[:16].eval()  # Use up to the third convolutional block
+        self.vgg = models.vgg19(pretrained=True).features[:16].eval()  # Use up to the third convolutional block
         for param in self.vgg.parameters():
             param.requires_grad = False
 

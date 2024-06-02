@@ -6,6 +6,9 @@ import torch
 def test_lpenet():
     module = LPENet()
 
+    # Print the total number of parameters
+    print(f"Total number of parameters: {sum(p.numel() for p in module.parameters())}")
+
     dummy_input = torch.randn(1, 6, 128, 128)
 
     output = module(dummy_input)
