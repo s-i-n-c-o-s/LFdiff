@@ -65,7 +65,8 @@ class LFDiffPretrainModule(L.LightningModule):
         optimizer = torch.optim.Adam(
             filter(lambda p: p.requires_grad, self.parameters()), lr=1e-4
         )
-        return optimizer
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.5)
+        return [optimizer], [{"scheduler": scheduler, "interval": "epoch"}]
 
 
 def collator(samples):
@@ -98,6 +99,7 @@ if __name__ == "__main__":
                 save_last="link", every_n_epochs=1, enable_version_counter=True
             )
         ],
+        # gradient_clip_val=0.5,
         # precision="16-mixed"
     )
     trainer.fit(
