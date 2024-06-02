@@ -91,6 +91,7 @@ class AlignmentModule(nn.Module):
         feature_channels: int = 60,
     ) -> None:
         super(AlignmentModule, self).__init__()
+        self.relu = nn.ReLU(inplace=True)
         self.conv1 = nn.Conv2d(
             in_channels, feature_channels, kernel_size=3, padding=1, bias=True
         )
