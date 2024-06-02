@@ -51,8 +51,9 @@ class SimpleModel(nn.Module):
 
 # Reconstruction Loss
 class ReconstructionLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, perceptual_weight ：float = 1e-2):
         super(ReconstructionLoss, self).__init__()
+        self.perceptual_weight = perceptual_weight
         self.l1_loss = nn.L1Loss()
         self.vgg = models.vgg19(pretrained=True).features[:16].eval()  # Use up to the third convolutional block
         for param in self.vgg.parameters():
@@ -67,6 +68,6 @@ class ReconstructionLoss(nn.Module):
         target_features = self.vgg(target)
         perceptual_loss = self.l1_loss(pred_features, target_features)
         
-        return l1_loss + perceptual_loss
+        return l1_loss + perceptual_loss * self.perceptual_weight
 
 
