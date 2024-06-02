@@ -1,6 +1,5 @@
 import os
 import time
-import glob
 import numpy as np
 import tqdm
 import torch
@@ -10,25 +9,16 @@ import torch.backends.cudnn as cudnn
 import utils
 from unet import DiffusionUNet
 import math
-from models.ahdr import AHDR
+from lfdiff.models import LPENet
 import itertools
-from datasets.sig17 import SIG17_Training_Dataset
+from lfdiff.datasets import SIG17_Training_Dataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-
-# This script is adapted from the following repositories
-# https://github.com/ermongroup/ddim
-# https://github.com/bahjat-kawar/ddrm
-
-
 def data_transform(X):
-    # return 2 * X - 1.0
     return X
 
-
 def inverse_data_transform(X):
-    # return torch.clamp((X + 1.0) / 2.0, 0.0, 1.0)
     return X
 
 class EMAHelper(object):
@@ -75,7 +65,6 @@ class EMAHelper(object):
     def load_state_dict(self, state_dict):
         self.shadow = state_dict
 
-
 def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_timesteps):
     def sigmoid(x):
         return 1 / (np.exp(-x) + 1)
@@ -99,15 +88,12 @@ def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_time
 def range_compressor(hdr_img, mu=5000):
     return (torch.log(1 + mu * hdr_img)) / math.log(1 + mu)
 
-
 class l1_loss_mu(nn.Module):
     def __init__(self, mu=5000):
         super(l1_loss_mu, self).__init__()
         self.mu = mu
 
     def forward(self, pred, label):
-        # mu_pred = range_compressor(pred, self.mu)
-        # mu_label = range_compressor(label, self.mu)
         return nn.L1Loss()(pred, label)
 
 class JointReconPerceptualLossAfterMuLaw(nn.Module):
@@ -116,24 +102,18 @@ class JointReconPerceptualLossAfterMuLaw(nn.Module):
         self.alpha = alpha
         self.mu = mu
         self.loss_recon = l1_loss_mu()
-        #self.loss_vgg = VGGPerceptualLoss(False)
 
     def forward(self, input, target):
-        # input_mu = range_compressor(input, self.mu)
-        # target_mu = range_compressor(target, self.mu)
         loss_recon = self.loss_recon(input, target)
-        #loss_vgg = self.loss_vgg(input_mu, target_mu)
-        #loss = loss_recon + self.alpha * loss_vgg
         loss = loss_recon
         return loss
 
 def noise_estimation_loss(model, x0, t, e, b, feature):
-    a = (1-b).cumprod(dim=0).index_select(0, t).view(-1, 1, 1, 1)
+    a = (1 - b).cumprod(dim=0).index_select(0, t).view(-1, 1, 1, 1)
     x = x0[:, 18:, :, :] * a.sqrt() + e * (1.0 - a).sqrt()
     output = model(torch.cat([x0[:, :18, :, :], x], dim=1), t.float(), feature)
     x0_t = (x - output * (1 - a).sqrt()) / a.sqrt()
     return (e - output).square().sum(dim=(1, 2, 3)).mean(dim=0) + nn.L1Loss()(x0_t, x0[:, 18:, :, :])
-
 
 class DenoisingDiffusion(object):
     def __init__(self, args, config):
@@ -143,14 +123,13 @@ class DenoisingDiffusion(object):
         self.device = config.device
 
         self.model = DiffusionUNet(config)
-
         self.model.to(self.device)
         self.model = torch.nn.DataParallel(self.model)
 
-        # ahdr model
-        self.ahdrmodel = AHDR(6, 6, 64, 32)
-        self.ahdrmodel.to(self.device)
-        self.ahdrmodel = torch.nn.DataParallel(self.ahdrmodel)
+        # Initialize LPENet model
+        self.lpenet = LPENet()
+        self.lpenet.to(self.device)
+        self.lpenet = torch.nn.DataParallel(self.lpenet)
 
         num_params = sum(param.numel() for param in self.model.parameters())
         print(num_params)
@@ -158,8 +137,9 @@ class DenoisingDiffusion(object):
         self.ema_helper = EMAHelper()
         self.ema_helper.register(self.model)
 
-        self.optimizer = utils.optimize.get_optimizer(self.config, itertools.chain(self.model.parameters(),
-                                                                                   self.ahdrmodel.parameters()))
+        self.optimizer = torch.optim.Adam(itertools.chain(self.model.parameters(), self.lpenet.parameters()), lr=1e-4)
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=50, gamma=0.1)
+        
         self.start_epoch, self.step = 0, 0
 
         betas = get_beta_schedule(
@@ -169,15 +149,15 @@ class DenoisingDiffusion(object):
             num_diffusion_timesteps=config.diffusion.num_diffusion_timesteps,
         )
 
-        betas = self.betas = torch.from_numpy(betas).float().to(self.device)
-        self.num_timesteps = betas.shape[0]
+        self.betas = torch.from_numpy(betas).float().to(self.device)
+        self.num_timesteps = self.betas.shape[0]
 
     def load_ddm_ckpt(self, load_path, ema=False):
         checkpoint = utils.logging.load_checkpoint(load_path, "cpu")
         self.start_epoch = checkpoint['epoch']
         self.step = checkpoint['step']
         self.model.load_state_dict(checkpoint['ddpm_state_dict'], strict=True)
-        self.ahdrmodel.load_state_dict(checkpoint['cnn_state_dict'], strict=True)
+        self.lpenet.load_state_dict(checkpoint['cnn_state_dict'], strict=True)
         self.optimizer.load_state_dict(checkpoint['optimizer'])
         self.ema_helper.load_state_dict(checkpoint['ema_helper'])
         if ema:
@@ -189,15 +169,14 @@ class DenoisingDiffusion(object):
         self.start_epoch = checkpoint['epoch']
         self.step = checkpoint['step']
         self.model.load_state_dict(checkpoint['ddpm_state_dict'], strict=True)
-        self.ahdrmodel.load_state_dict(checkpoint['cnn_state_dict'], strict=True)
+        self.lpenet.load_state_dict(checkpoint['cnn_state_dict'], strict=True)
         print("=> loaded checkpoint '{}' (epoch {}, step {})".format(load_path, checkpoint['epoch'], self.step))
 
     def train(self, DATASET):
         cudnn.benchmark = True
         _, val_loader = DATASET.get_loaders()
         train_dataset = SIG17_Training_Dataset(root_dir='./data', sub_set='sig17_training_crop128_stride64_aug', is_training=True)
-        train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, num_workers=8,
-                                  pin_memory=True)
+        train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True, num_workers=8, pin_memory=True)
 
         if os.path.isfile(self.args.resume):
             self.load_ddm_ckpt(self.args.resume)
@@ -207,7 +186,7 @@ class DenoisingDiffusion(object):
             data_start = time.time()
             data_time = 0
             with tqdm(total=train_loader.__len__()) as pbar:
-                for i, x,  in enumerate(train_loader):
+                for i, x in enumerate(train_loader):
                     x = x.flatten(start_dim=0, end_dim=1) if x.ndim == 5 else x
                     n = x.size(0)
                     data_time += time.time() - data_start
@@ -217,12 +196,11 @@ class DenoisingDiffusion(object):
                     x = x.to(self.device)
                     x = data_transform(x)
 
-                    attenfeature =self.ahdrmodel(x[:, :6, :, :],x[:, 6:12, :, :],x[:, 12:18, :, :])
+                    attenfeature = self.lpenet(x[:, :6, :, :], x[:, 6:12, :, :], x[:, 12:18, :, :])
 
                     e = torch.randn_like(x[:, 18:, :, :])
                     b = self.betas
 
-                    # antithetic sampling
                     t = torch.randint(low=0, high=self.num_timesteps, size=(n // 2 + 1,)).to(self.device)
                     t = torch.cat([t, self.num_timesteps - t - 1], dim=0)[:n]
                     loss = noise_estimation_loss(self.model, x, t, e, b, attenfeature)
@@ -234,6 +212,7 @@ class DenoisingDiffusion(object):
                     loss.backward()
 
                     self.optimizer.step()
+                    self.scheduler.step()
                     self.ema_helper.update(self.model)
                     data_start = time.time()
 
@@ -242,14 +221,14 @@ class DenoisingDiffusion(object):
 
                     if self.step % self.config.training.validation_freq == 0:
                         self.model.eval()
-                        self.sample_validation_patches(val_loader, self.step, self.ahdrmodel)
+                        self.sample_validation_patches(val_loader, self.step, self.lpenet)
 
                     if self.step % self.config.training.snapshot_freq == 0 or self.step == 1:
                         utils.logging.save_checkpoint({
                             'epoch': epoch + 1,
                             'step': self.step,
                             'ddpm_state_dict': self.model.state_dict(),
-                            'cnn_state_dict': self.ahdrmodel.state_dict(),
+                            'cnn_state_dict': self.lpenet.state_dict(),
                             'optimizer': self.optimizer.state_dict(),
                             'ema_helper': self.ema_helper.state_dict(),
                             'params': self.args,
@@ -260,18 +239,14 @@ class DenoisingDiffusion(object):
         skip = self.config.diffusion.num_diffusion_timesteps // self.args.sampling_timesteps
         seq = range(0, self.config.diffusion.num_diffusion_timesteps, skip)
         if patch_locs is not None:
-            xs = utils.sampling.generalized_steps_overlapping(x, x_cond, seq, self.model,self.ahdrmodel, self.betas, eta=0.,
-                                                              corners=patch_locs, p_size=patch_size)
+            xs = utils.sampling.generalized_steps_overlapping(x, x_cond, seq, self.model, self.lpenet, self.betas, eta=0., corners=patch_locs, p_size=patch_size)
         else:
             xs = utils.sampling.generalized_steps(x, x_cond, seq, self.model, attenfeature, self.betas, eta=0.)
         if last:
             xs = xs[0][-1]
         return xs
 
-    def mu_tonemap(self, hdr_image, mu=5000):
-        return np.log(1 + mu * hdr_image) / np.log(1 + mu)
-    
-    def sample_validation_patches(self, val_loader, step, ahdrmodel):
+    def sample_validation_patches(self, val_loader, step, lpenet):
         image_folder = os.path.join(self.args.image_folder, self.config.data.dataset + str(self.config.data.image_size))
         with torch.no_grad():
             print(f"Processing a single batch of validation images at step: {step}")
@@ -282,8 +257,7 @@ class DenoisingDiffusion(object):
             x_cond = x[:, :18, :, :].to(self.device)
             x_cond = data_transform(x_cond)
 
-            # ahdr res
-            attenfeature = ahdrmodel(x_cond[:, :6, :, :], x[:, 6:12, :, :], x[:, 12:18, :, :])
+            attenfeature = lpenet(x_cond[:, :6, :, :], x[:, 6:12, :, :], x[:, 12:18, :, :])
 
             x = torch.randn(n, 3, self.config.data.image_size, self.config.data.image_size, device=self.device)
             x = self.sample_image(x_cond, x, attenfeature)
