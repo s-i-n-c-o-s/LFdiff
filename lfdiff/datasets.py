@@ -36,6 +36,10 @@ def gamma_correction(img, expo, gamma):
     return (img**gamma) / 2.0**expo
 
 
+def mu_tonemap(hdr_image, mu=5000):
+    return np.log(1 + mu * hdr_image) / np.log(1 + mu)
+
+
 class SIG17_Training_Dataset(Dataset):
 
     def __init__(self, root_dir, sub_set, is_training=True):
@@ -59,9 +63,6 @@ class SIG17_Training_Dataset(Dataset):
             )
             label_path = os.path.join(self.scenes_dir, self.scenes_list[scene])
             self.image_list += [[exposure_file_path, ldr_file_path, label_path]]
-
-    def mu_tonemap(self, hdr_image, mu=5000):
-        return np.log(1 + mu * hdr_image) / np.log(1 + mu)
 
     def __getitem__(self, index):
         # Read exposure times
@@ -88,18 +89,15 @@ class SIG17_Training_Dataset(Dataset):
         img1 = pre_img1.astype(np.float32)  # .transpose(2, 0, 1)
         img2 = pre_img2.astype(np.float32)  # .transpose(2, 0, 1)
         label = label.astype(np.float32)  # .transpose(2, 0, 1)
-        label_t = self.mu_tonemap(label)
+        label_t = mu_tonemap(label)
 
-        return torch.cat(
-            [
-                self.transforms(img0),
-                self.transforms(img1),
-                self.transforms(img2),
-                self.transforms(label),
-                self.transforms(label_t),
-            ],
-            dim=0,
-        )
+        return {
+            "x1": self.transforms(img0),
+            "x2": self.transforms(img1),
+            "x3": self.transforms(img2),
+            "gt": self.transforms(label),
+            "gttm": self.transforms(label_t),
+        }
 
     def __len__(self):
         return len(self.scenes_list)
@@ -114,18 +112,36 @@ class SIG17_Validation_Dataset(Dataset):
         self.crop_size = crop_size
 
         # sample dir
-        self.scenes_dir = osp.join(root_dir, "Test")
-        self.scenes_list = sorted(os.listdir(self.scenes_dir))
+        self.scenes_dir_extra = osp.join(root_dir, "Test", "EXTRA")
+        self.scenes_dir_paper = osp.join(root_dir, "Test", "PAPER")
+        self.scenes_list_extra = sorted(os.listdir(self.scenes_dir_extra))
+        self.scenes_list_paper = sorted(os.listdir(self.scenes_dir_paper))
 
         self.image_list = []
-        for scene in range(len(self.scenes_list)):
+        for scene in range(len(self.scenes_list_extra)):
             exposure_file_path = os.path.join(
-                self.scenes_dir, self.scenes_list[scene], "exposure.txt"
+                self.scenes_dir_extra, self.scenes_list_extra[scene], "exposure.txt"
             )
             ldr_file_path = list_all_files_sorted(
-                os.path.join(self.scenes_dir, self.scenes_list[scene]), ".tif"
+                os.path.join(self.scenes_dir_extra, self.scenes_list_extra[scene]),
+                ".tif",
             )
-            label_path = os.path.join(self.scenes_dir, self.scenes_list[scene])
+            label_path = os.path.join(
+                self.scenes_dir_extra, self.scenes_list_extra[scene]
+            )
+            self.image_list += [[exposure_file_path, ldr_file_path, label_path]]
+
+        for scene in range(len(self.scenes_list_paper)):
+            exposure_file_path = os.path.join(
+                self.scenes_dir_paper, self.scenes_list_paper[scene], "exposure.txt"
+            )
+            ldr_file_path = list_all_files_sorted(
+                os.path.join(self.scenes_dir_paper, self.scenes_list_paper[scene]),
+                ".tif",
+            )
+            label_path = os.path.join(
+                self.scenes_dir_paper, self.scenes_list_paper[scene]
+            )
             self.image_list += [[exposure_file_path, ldr_file_path, label_path]]
 
     def __getitem__(self, index):
@@ -180,13 +196,19 @@ class SIG17_Validation_Dataset(Dataset):
         img0 = torch.from_numpy(img0)
         img1 = torch.from_numpy(img1)
         img2 = torch.from_numpy(img2)
+        label_t = torch.from_numpy(mu_tonemap(label))
         label = torch.from_numpy(label)
 
-        sample = {"input0": img0, "input1": img1, "input2": img2, "label": label}
-        return sample
+        return {
+            "x1": img0,
+            "x2": img1,
+            "x3": img2,
+            "gt": label,
+            "gttm": label_t,
+        }
 
     def __len__(self):
-        return len(self.scenes_list)
+        return len(self.scenes_list_extra) + len(self.scenes_list_paper)
 
 
 class Img_Dataset(Dataset):

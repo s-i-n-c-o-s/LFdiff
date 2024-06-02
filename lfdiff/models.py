@@ -5,6 +5,10 @@ import torch.nn.functional as F
 from einops import rearrange
 
 
+def mu_tonemap(x, mu=torch.tensor(5000)):
+    return torch.log(1 + mu * x) / torch.log(1 + mu)
+
+
 # Residual Block
 class ResidualBlock(nn.Module):
     def __init__(self, in_channels):
