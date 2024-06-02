@@ -8,7 +8,9 @@ class ReconstructionLoss(nn.Module):
         self.perceptual_weight = perceptual_weight
         self.l1_loss = nn.L1Loss()
         self.vgg = (
-            models.vgg19(weights="pretrained").features[:28].eval()
+            models.vgg19(weights=models.VGG19_Weights.IMAGENET1K_V1)
+            .features[:28]
+            .eval()
         )  # Use up to the fourth maxpooling layer
         for param in self.vgg.parameters():
             param.requires_grad = False
