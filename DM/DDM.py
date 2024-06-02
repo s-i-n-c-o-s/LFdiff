@@ -15,6 +15,10 @@ from lfdiff.datasets import SIG17_Training_Dataset
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+# This script is adapted from the following repositories
+# https://github.com/ermongroup/ddim
+# https://github.com/bahjat-kawar/ddrm
+
 def data_transform(X):
     return X
 
