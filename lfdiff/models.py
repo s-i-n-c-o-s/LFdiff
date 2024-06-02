@@ -303,7 +303,7 @@ class CrossSelfAttention(nn.Module):
 # LPENet
 class LPENet(nn.Module):
     def __init__(
-        self, in_channels=6, out_channels=3, feature_channels=60, num_residual_blocks=4
+        self, in_channels, out_channels=3, feature_channels=60, num_residual_blocks=4
     ):
         super(LPENet, self).__init__()
         layers = [

@@ -88,7 +88,7 @@ class SIG17_Training_Dataset(Dataset):
         img1 = pre_img1.astype(np.float32)  # .transpose(2, 0, 1)
         img2 = pre_img2.astype(np.float32)  # .transpose(2, 0, 1)
         label = label.astype(np.float32)  # .transpose(2, 0, 1)
-        label = self.mu_tonemap(label)
+        label_t = self.mu_tonemap(label)
 
         return torch.cat(
             [
@@ -96,6 +96,7 @@ class SIG17_Training_Dataset(Dataset):
                 self.transforms(img1),
                 self.transforms(img2),
                 self.transforms(label),
+                self.transforms(label_t),
             ],
             dim=0,
         )
